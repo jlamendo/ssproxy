@@ -24,9 +24,12 @@ import os
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, HERE)
+# Tests live in tests/; package source is at src/ssproxy/. Prepend the src
+# tree to sys.path so `from ssproxy.<x> import y` resolves without requiring
+# an editable install.
+sys.path.insert(0, os.path.join(HERE, "..", "src"))
 
-from scrub_secrets import scrub_text, scrub_secrets, REDACTED
+from ssproxy.scrub_secrets import scrub_text, scrub_secrets, REDACTED
 
 
 FAILURES: list[str] = []
@@ -276,7 +279,7 @@ if once != twice:
 # include backslash). Any future regex addition that lets the secret
 # capture extend across a JSON-escape `\` will fail this test.
 
-from scrub_secrets import scrub_text_fixed_length
+from ssproxy.scrub_secrets import scrub_text_fixed_length
 
 def _outer_body(secret_value: str) -> str:
     """Embed a secret inside `\\"<value>\\"` inside a tool_result-like

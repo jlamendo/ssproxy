@@ -41,11 +41,19 @@ from typing import Any
 
 from mitmproxy import http, ctx
 
-# scrub_secrets is shipped at the same dir as this file. mitmproxy puts
-# the addon's directory on sys.path before loading.
-import scrub_secrets
+# Dual-mode import: when invoked via `mitmdump -s /path/to/addon.py`,
+# mitmproxy adds the addon's directory to sys.path so the sibling module
+# is importable bare. When loaded as part of the installed ssproxy
+# package, relative imports work. Try the package-relative form first so
+# pip-installed users get the right module; fall through to the bare
+# import for the standalone mitmdump invocation.
+try:
+    from . import scrub_secrets
+    from .scrub_secrets import scrub_text_fixed_length  # noqa: E402
+except ImportError:
+    import scrub_secrets  # type: ignore[no-redef]
+    from scrub_secrets import scrub_text_fixed_length  # noqa: E402 # type: ignore
 scrub_secrets.REDACTED = "[REDACTED BY SSPROXY]"
-from scrub_secrets import scrub_text_fixed_length  # noqa: E402
 
 LLM_HOSTS: frozenset[str] = frozenset({
     "api.anthropic.com",
