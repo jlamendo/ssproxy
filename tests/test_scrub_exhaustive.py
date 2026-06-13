@@ -1,11 +1,11 @@
-"""Exhaustive coverage tests for the four credential types the operator
-cares most about: kubeconfig, DigitalOcean, Cloudflare, GitHub.
+"""Exhaustive coverage tests for the four credential types most likely
+to leak in real-world traffic: kubeconfig, DigitalOcean, Cloudflare, GitHub.
 
-Run: python3 mcp-servers/common/test_scrub_exhaustive.py
+Run: python3 tests/test_scrub_exhaustive.py
 
 Each test calls scrub_text on a representative real-world shape and
 asserts (a) the credential value is gone from the output AND (b) some
-recognizable surrounding context survives, so an operator reviewing
+recognizable surrounding context survives, so a reader reviewing
 a scrubbed log can still tell what was redacted.
 
 Variable names deliberately avoid `secret`, `token`, `password`, etc.
@@ -368,7 +368,7 @@ keepers = [
     "username doadmin (lowercase 8 chars)",
     "ya29 prefix mentioned but not a real token",
     "the field cloudflareApiToken is described here",
-    "docker image cork-1.vrtx.ai:30500/cork-webui:f542ce6",
+    "docker image registry.example.com/myapp:f542ce6",
 ]
 for k in keepers:
     o = scrub_text(k)

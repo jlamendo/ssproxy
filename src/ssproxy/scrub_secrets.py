@@ -16,30 +16,27 @@ a fresh leak path.
 
 WHEN NOT TO USE
 ---------------
-Don't use this on MCPs whose whole purpose is to RETURN secret values
-(e.g. the vault MCP — secret retrieval is the entire job). Those MCPs
-need a different protection model (operator pipes the value via
-`cork-cred jit` rather than tool-call return).
+Don't apply this to data flows whose whole job is to return secret
+values (a vault-retrieval API, a credential-issuing service, a JIT
+secret broker). Scrubbing the actual payload defeats the purpose;
+those flows need a different protection model.
 
 PUBLIC SURFACE
 --------------
 Two text-level scrub variants live here:
 
   ``scrub_text(s)``                — variable-length replacement, marker
-                                     defaults to ``[REDACTED]``. Used by
-                                     MCP response scrubbing, the
-                                     graphiti ingester, and worker
-                                     bundle scrubbing
-                                     (``lib/cork_credential_scrubber.py``).
-                                     Readability beats byte-count for
-                                     these consumers.
+                                     defaults to ``[REDACTED]``. Use for
+                                     log lines, transcripts, anything
+                                     where readability beats byte-count.
 
   ``scrub_text_fixed_length(s)``   — same-length replacement using the
                                      ``fixed_length_redaction`` tier
-                                     ladder. Used exclusively by
-                                     ssproxy's egress request hook so
-                                     Content-Length stays pristine and
-                                     the wire-format never changes.
+                                     ladder. Used by the ssproxy egress
+                                     request hook so Content-Length
+                                     stays pristine and the wire-format
+                                     never changes between client and
+                                     upstream.
 """
 
 from __future__ import annotations
@@ -184,8 +181,8 @@ _TOKEN_PATTERNS = [
     re.compile(r"\bdop_v1_[A-Fa-f0-9]{40,}\b"),
     # DigitalOcean OAuth access + refresh tokens. Same shape family as
     # the PAT, distinct prefixes. gitleaks has fixed-64 entries for
-    # both but no greedy cork pre-pass — adding here so a longer body
-    # gets consumed whole (mirroring the `dop_v1_` handling).
+    # both but no greedy pre-pass — added here so a longer body gets
+    # consumed whole (mirroring the `dop_v1_` handling).
     re.compile(r"\bdoo_v1_[A-Fa-f0-9]{40,}\b"),
     re.compile(r"\bdor_v1_[A-Fa-f0-9]{40,}\b"),
     # DigitalOcean Spaces access key ID. Distinctive `DO00` prefix +
@@ -199,7 +196,7 @@ _TOKEN_PATTERNS = [
     # 6-char CRC32 checksum); greedy `{36,251}` to track GitHub's
     # documented 255-char ceiling (see token-format docs).
     re.compile(r"\bghp_[A-Za-z0-9]{36,251}\b"),
-    # OAuth access token. Was fixed-36 in gitleaks; add cork greedy.
+    # OAuth access token. Was fixed-36 in gitleaks; widened to greedy.
     re.compile(r"\bgho_[A-Za-z0-9]{36,251}\b"),
     # GitHub App user-to-server token.
     re.compile(r"\bghu_[A-Za-z0-9]{36,251}\b"),
@@ -320,7 +317,7 @@ _URI_USERINFO = re.compile(
 # how GitHub PATs (and several other forge auths) are typically
 # embedded in clone URLs:
 #
-#   https://ghp_AAA...@github.com/babyops-app/cork
+#   https://ghp_AAA...@github.com/acme/example
 #   https://github_pat_XXX...@github.com/owner/repo.git
 #   https://oauth2:TOKEN@gitlab.example.com    ← caught by _URI_USERINFO
 #   https://x-access-token:TOKEN@github.com    ← caught by _URI_USERINFO
@@ -398,17 +395,17 @@ def scrub_text(s: str) -> str:
          as a clean unit. Defeats partial-match residue inside URLs
          and catches tokens with no prefix at all (legacy 40-char-hex
          OAuth tokens).
-      1. Cork's GREEDY token-prefix patterns (`\\bghp_[A-Za-z0-9]{36,}\\b`
+      1. The GREEDY token-prefix patterns (`\\bghp_[A-Za-z0-9]{36,}\\b`
          etc.). Run BEFORE gitleaks so longer-than-typical tokens get
          consumed whole — gitleaks's fixed-length patterns (`ghp_[36]`,
          `github_pat_\\w{82}`) would otherwise eat the first N chars and
-         leave the trailing chars behind as a partial leak. With cork
+         leave the trailing chars behind as a partial leak. With the greedy pre-pass
          going first, the greedy `{N,}` quantifier handles real-world
          tokens that exceed the typical length.
       2. Gitleaks-derived prefix/format patterns (~119 modern provider
-         tokens). Catches anything cork doesn't have an explicit greedy
+         tokens). Catches anything the greedy pre-pass doesn't have an explicit greedy
          pattern for (most non-github providers).
-      3. Cork's original heuristics for labeled `password=xxx`, bearer
+      3. Heuristics for labeled `password=xxx`, bearer
          auth headers, etc.
 
     Idempotent — `[REDACTED]` doesn't match any of the patterns.
@@ -427,8 +424,8 @@ def scrub_text(s: str) -> str:
     out = _URI_USERINFO_NOPASS.sub(
         lambda m: f"{m.group('scheme')}{REDACTED}@{m.group('host')}", out
     )
-    # Greedy cork patterns BEFORE gitleaks. Both target overlapping
-    # token shapes (`ghp_`, `github_pat_`, etc.); cork's are `{N,}`
+    # Greedy token-prefix patterns BEFORE gitleaks. Both target overlapping
+    # token shapes (`ghp_`, `github_pat_`, etc.); the prefix patterns are `{N,}`
     # quantifiers that consume the whole token, gitleaks's are exact
     # fixed-length and would leave the tail as a partial leak.
     for pat in _TOKEN_PATTERNS:
@@ -454,7 +451,7 @@ def scrub_text(s: str) -> str:
 #
 # Only the ssproxy addon calls these helpers. Every other consumer
 # (graphiti ingest, worker bundle scrubbing per
-# ``lib/cork_credential_scrubber.py``, MCP response scrub) keeps using
+# `(host-side companion library)`, MCP response scrub) keeps using
 # the variable-length ``REDACTED`` marker via ``scrub_text`` — where
 # log/transcript readability beats byte-count preservation.
 

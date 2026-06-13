@@ -1,23 +1,20 @@
-"""yolocage ssproxy mitmproxy addon — egress credential scrubber.
+"""ssproxy mitmproxy addon — egress credential scrubber.
 
-Sits between the in-cage agent and the LLM provider. For every HTTPS
-request to a known LLM host (see ``LLM_HOSTS``), it runs a byte-stream
-regex scrubber over the JSON request body and replaces any matched
-credential-shaped string with a same-length redaction marker before
-forwarding.
+Sits between an LLM-using client (a CLI agent, an IDE plugin, a notebook
+kernel, anything that POSTs prompts to an LLM provider) and the upstream
+LLM API. For every HTTPS request to a known LLM host (see ``LLM_HOSTS``),
+it runs a byte-stream regex scrubber over the JSON request body and
+replaces any matched credential-shaped string with a same-length
+redaction marker before forwarding.
 
-This is yolocage's safety net for "I accidentally cat'd .env into
-context" — once a secret is in the conversation history, hooks can't
+This is the safety net for "I accidentally cat'd .env into context" —
+once a secret is in the conversation history, client-side hooks can't
 reach it; the request hook here is the last chance to strip it before
-it leaves the cage.
+it leaves the machine.
 
-The auth header (Bearer/x-api-key) passes through untouched: yolocage's
-threat model is unintentional leakage in the BODY, not the LLM
-credential itself.
-
-This file is a stripped-down fork of cork's ssproxy addon — same
-scrubber library (the ssproxy/scrub_secrets.py upstream), minus
-cork-specific OAuth synth + signed-thinking-preservation hooks.
+The auth header (Bearer/x-api-key) passes through untouched: the threat
+model is unintentional leakage in the BODY, not the LLM credential
+itself.
 
 EXTENSIONS
 ----------

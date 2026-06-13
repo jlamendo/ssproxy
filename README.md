@@ -6,7 +6,7 @@ Built for the case where an agent accidentally reads a `.env` file or a `git con
 
 ## How it works
 
-ssproxy is a mitmproxy addon. It registers a request hook that walks the body bytes through a regex pipeline lifted from gitleaks, plus a small set of cork-curated patterns for labeled-secret shapes (e.g. `password:`, `auth-token:`). Each match is replaced in place with a redaction marker of the same byte length, so Content-Length stays constant and the upstream LLM parses the body identically to the original.
+ssproxy is a mitmproxy addon. It registers a request hook that walks the body bytes through a regex pipeline lifted from gitleaks, plus a small set of curated patterns for labeled-secret shapes (e.g. `password:`, `auth-token:`). Each match is replaced in place with a redaction marker of the same byte length, so Content-Length stays constant and the upstream LLM parses the body identically to the original.
 
 Response bodies pass through untouched. Headers (including bearer tokens that legitimately belong in the request) pass through untouched. The scrubber only touches the request body of requests bound for a known LLM host.
 
