@@ -21,8 +21,15 @@ Anthropic-flavored helpers (for consumers doing more than pure scrubbing):
                                      (name-remap, input translation) as
                                      they stream, without buffering the
                                      whole response
+  force_identity_encoding          — mitmproxy request-hook helper that
+                                     stops the upstream from gzipping
+                                     the response (mandatory for
+                                     SSEToolUseRewriter callers — see
+                                     the module warning for why)
   rewrite_message_json             — JSON (non-streaming) response-body
                                      tool_use rewriter
+  ANTHROPIC_HOST                   — "api.anthropic.com"
+  ANTHROPIC_MESSAGES_PATH_PREFIX   — "/v1/messages"
 
 Drop the addon into a mitmproxy invocation with:
   mitmdump -s ssproxy/addon.py
@@ -44,7 +51,10 @@ from .anthropic_signed import (
     scrub_text_fixed_length_preserve_signed,
 )
 from .tool_use_rewriter import (
+    ANTHROPIC_HOST,
+    ANTHROPIC_MESSAGES_PATH_PREFIX,
     SSEToolUseRewriter,
+    force_identity_encoding,
     rewrite_message_json,
 )
 
@@ -57,7 +67,10 @@ __all__ = [
     "find_signed_thinking_spans",
     "scrub_text_fixed_length_preserve_signed",
     "SSEToolUseRewriter",
+    "force_identity_encoding",
     "rewrite_message_json",
+    "ANTHROPIC_HOST",
+    "ANTHROPIC_MESSAGES_PATH_PREFIX",
 ]
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"

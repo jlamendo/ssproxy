@@ -52,6 +52,24 @@ Any exception inside the frame handler falls through to pass-through
 of the ORIGINAL frame bytes with capture state reset — the proxy
 must never break a response because of a rewriter bug. Errors are
 logged via the stdlib :mod:`logging` module for operator visibility.
+
+.. warning::
+
+    **Gzip'd responses will corrupt the client.** mitmproxy passes
+    the RAW wire bytes to ``flow.response.stream`` callbacks — it
+    does not auto-decompress even if ``Content-Encoding: gzip`` is
+    set. If Anthropic returns a gzip'd SSE response, the SSE frame
+    parser in :class:`SSEToolUseRewriter` scans binary gzip bytes
+    for ``\\n\\n`` separators and splits/re-emits chunks around them.
+    Even when total bytes are preserved, chunk boundaries land mid-
+    gzip-block and the client's streaming zlib decoder trips (Bun
+    surfaces this as ``ZlibError`` on the ``/v1/messages`` fetch).
+
+    The mitigation is trivial: strip ``Accept-Encoding`` on the
+    outgoing request so Anthropic returns identity-encoded SSE.
+    :func:`force_identity_encoding` does exactly that — call it
+    from your mitmproxy addon's ``request`` hook. See its docstring
+    for a complete addon skeleton.
 """
 from __future__ import annotations
 
@@ -64,6 +82,68 @@ logger = logging.getLogger(__name__)
 
 ANTHROPIC_HOST = "api.anthropic.com"
 ANTHROPIC_MESSAGES_PATH_PREFIX = "/v1/messages"
+
+
+# ─── mitmproxy request-side helper ─────────────────────────────────
+
+
+def force_identity_encoding(request: Any) -> bool:
+    """Set ``Accept-Encoding: identity`` on a mitmproxy request.
+
+    Call this from your addon's ``request`` hook for any request whose
+    response you plan to route through :class:`SSEToolUseRewriter`. It
+    tells the upstream (Anthropic) to send the SSE body uncompressed
+    so the stream rewriter never has to touch gzip'd bytes — see the
+    module-level warning for the underlying constraint.
+
+    Returns ``True`` if the header was set, ``False`` on any failure
+    (guaranteed not to raise; the proxy must never crash a flow
+    because a helper couldn't mutate a header).
+
+    Skeleton::
+
+        from mitmproxy import http
+        from ssproxy import (
+            SSEToolUseRewriter, force_identity_encoding,
+            ANTHROPIC_HOST, ANTHROPIC_MESSAGES_PATH_PREFIX,
+        )
+
+        class MyRewriter(SSEToolUseRewriter):
+            def should_capture(self, name): return name == "OldName"
+            def rewrite(self, name, input): return ("NewName", input)
+
+        class MyAddon:
+            def _matches(self, flow):
+                return (
+                    flow.request.pretty_host == ANTHROPIC_HOST
+                    and flow.request.path.startswith(
+                        ANTHROPIC_MESSAGES_PATH_PREFIX)
+                )
+
+            def request(self, flow):
+                if self._matches(flow):
+                    force_identity_encoding(flow.request)
+
+            def responseheaders(self, flow):
+                if not self._matches(flow) or flow.response is None:
+                    return
+                if "text/event-stream" not in flow.response.headers.get(
+                    "content-type", "").lower():
+                    return
+                # Defense in depth: if the response came back encoded
+                # anyway (a proxy along the way ignored our identity
+                # request), don't install the stream rewriter.
+                ce = flow.response.headers.get(
+                    "content-encoding", "").strip().lower()
+                if ce and ce != "identity":
+                    return
+                flow.response.stream = MyRewriter()
+    """
+    try:
+        request.headers["accept-encoding"] = "identity"
+        return True
+    except Exception:  # pragma: no cover — defensive
+        return False
 
 
 # ─── JSON (non-streaming) rewrite ──────────────────────────────────

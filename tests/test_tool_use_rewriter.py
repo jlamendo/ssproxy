@@ -326,6 +326,50 @@ def test_sse_hook_exception_isolated() -> None:
     )
 
 
+from ssproxy.tool_use_rewriter import force_identity_encoding
+
+
+class _FakeHeaders(dict):
+    """Case-insensitive minimal dict — mirrors mitmproxy.http.Headers'
+    dict-style read/write API for these tests."""
+
+    def __setitem__(self, k, v):
+        super().__setitem__(k.lower(), v)
+
+    def __getitem__(self, k):
+        return super().__getitem__(k.lower())
+
+    def get(self, k, default=None):
+        return super().get(k.lower(), default)
+
+
+class _FakeRequest:
+    def __init__(self, headers=None):
+        self.headers = _FakeHeaders(headers or {})
+
+
+def test_force_identity_encoding_sets_header() -> None:
+    req = _FakeRequest()
+    assert force_identity_encoding(req) is True
+    assert req.headers.get("accept-encoding") == "identity"
+
+
+def test_force_identity_encoding_overwrites_existing() -> None:
+    req = _FakeRequest({"accept-encoding": "gzip, deflate"})
+    assert force_identity_encoding(req) is True
+    assert req.headers.get("accept-encoding") == "identity"
+
+
+def test_force_identity_encoding_returns_false_on_failure() -> None:
+    class _BadRequest:
+        @property
+        def headers(self):
+            raise RuntimeError("headers unavailable")
+
+    # Must never raise — a helper bug can't be allowed to break the flow.
+    assert force_identity_encoding(_BadRequest()) is False
+
+
 # ─── main runner ──────────────────────────────────────────────────
 
 
