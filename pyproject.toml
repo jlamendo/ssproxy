@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ssproxy"
-version = "0.1.0"
+version = "0.2.0"
 description = "Egress credential scrubber for LLM API traffic, shipped as a mitmproxy addon library."
 readme = "README.md"
 license = { text = "MIT" }

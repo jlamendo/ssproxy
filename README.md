@@ -62,6 +62,50 @@ By default:
 
 To add hosts, set `SSPROXY_EXTRA_HOSTS` to a comma-separated list, or wrap the addon in your own mitmproxy config.
 
+## Anthropic-flavored helpers
+
+ssproxy also ships two building blocks for consumers doing more than
+pure scrubbing on Anthropic's `/v1/messages`:
+
+### `find_signed_thinking_spans` + `scrub_text_fixed_length_preserve_signed`
+
+Anthropic's extended-thinking API signs each `thinking` content block
+against the exact JSON bytes of the enclosing object. Any same-length
+edit inside a signed span fails the signature check on the next turn.
+These helpers locate signed spans in a request body and splice them
+back verbatim under the scrubber, so egress interception keeps
+working for clients that use `thinking` blocks.
+
+```python
+from ssproxy import scrub_text_fixed_length_preserve_signed
+scrubbed = scrub_text_fixed_length_preserve_signed(body_text)
+# same-length scrub applied to non-signed regions; signed spans
+# copied byte-for-byte
+```
+
+### `SSEToolUseRewriter` + `rewrite_message_json`
+
+Rewrite `tool_use` blocks (name-remap, input translation) in
+Anthropic responses — streaming SSE or non-streaming JSON. Subclass
+the SSE rewriter to declare which tool names you rewrite and how:
+
+```python
+from ssproxy import SSEToolUseRewriter
+
+class RenameFoo(SSEToolUseRewriter):
+    def should_capture(self, name):
+        return name == "foo_tool"
+    def rewrite(self, name, input):
+        return ("bar_tool", {"translated": input})
+
+# in a mitmproxy responseheaders hook:
+#   if content-type is text/event-stream:
+#     flow.response.stream = RenameFoo()
+```
+
+The block's `id` is preserved so the client's next-turn tool_result
+still routes correctly.
+
 ## Used by
 
 [yolocage](https://github.com/jlamendo/yolocage), an opinionated Docker container for running claude-code and codex in yolo mode safely. Yolocage embeds ssproxy in the container image and routes the agent's egress through it transparently.

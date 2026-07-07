@@ -8,6 +8,22 @@ Public surface:
   GITLEAKS_PATTERNS                — the lifted pattern list (regex, rule_id)
   REDACTED                         — the variable-length marker string
 
+Anthropic-flavored helpers (for consumers doing more than pure scrubbing):
+  find_signed_thinking_spans       — locate Anthropic-signed content-block
+                                     byte ranges in an Anthropic /v1/messages
+                                     request body
+  scrub_text_fixed_length_preserve_signed
+                                   — same-length scrub that splices signed
+                                     spans back verbatim so upstream's
+                                     signature check still passes
+  SSEToolUseRewriter               — per-flow SSE state machine for
+                                     rewriting Anthropic tool_use blocks
+                                     (name-remap, input translation) as
+                                     they stream, without buffering the
+                                     whole response
+  rewrite_message_json             — JSON (non-streaming) response-body
+                                     tool_use rewriter
+
 Drop the addon into a mitmproxy invocation with:
   mitmdump -s ssproxy/addon.py
 
@@ -23,6 +39,14 @@ from .scrub_secrets import (
     REDACTED,
 )
 from .gitleaks_patterns import GITLEAKS_PATTERNS
+from .anthropic_signed import (
+    find_signed_thinking_spans,
+    scrub_text_fixed_length_preserve_signed,
+)
+from .tool_use_rewriter import (
+    SSEToolUseRewriter,
+    rewrite_message_json,
+)
 
 __all__ = [
     "scrub_text",
@@ -30,6 +54,10 @@ __all__ = [
     "fixed_length_redaction",
     "GITLEAKS_PATTERNS",
     "REDACTED",
+    "find_signed_thinking_spans",
+    "scrub_text_fixed_length_preserve_signed",
+    "SSEToolUseRewriter",
+    "rewrite_message_json",
 ]
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
