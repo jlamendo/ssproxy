@@ -16,27 +16,30 @@ a fresh leak path.
 
 WHEN NOT TO USE
 ---------------
-Don't apply this to data flows whose whole job is to return secret
-values (a vault-retrieval API, a credential-issuing service, a JIT
-secret broker). Scrubbing the actual payload defeats the purpose;
-those flows need a different protection model.
+Don't use this on MCPs whose whole purpose is to RETURN secret values
+(e.g. the vault MCP — secret retrieval is the entire job). Those MCPs
+need a different protection model (operator pipes the value via
+`cork-cred jit` rather than tool-call return).
 
 PUBLIC SURFACE
 --------------
 Two text-level scrub variants live here:
 
   ``scrub_text(s)``                — variable-length replacement, marker
-                                     defaults to ``[REDACTED]``. Use for
-                                     log lines, transcripts, anything
-                                     where readability beats byte-count.
+                                     defaults to ``[REDACTED]``. Used by
+                                     MCP response scrubbing, the
+                                     graphiti ingester, and worker
+                                     bundle scrubbing
+                                     (``lib/cork_credential_scrubber.py``).
+                                     Readability beats byte-count for
+                                     these consumers.
 
   ``scrub_text_fixed_length(s)``   — same-length replacement using the
                                      ``fixed_length_redaction`` tier
-                                     ladder. Used by the ssproxy egress
-                                     request hook so Content-Length
-                                     stays pristine and the wire-format
-                                     never changes between client and
-                                     upstream.
+                                     ladder. Used exclusively by
+                                     ssproxy's egress request hook so
+                                     Content-Length stays pristine and
+                                     the wire-format never changes.
 """
 
 from __future__ import annotations
@@ -115,13 +118,21 @@ REDACTED = "[REDACTED]"
 
 
 def fixed_length_redaction(n: int) -> str:
-    """Return a redaction marker of EXACTLY ``n`` bytes.
+    """Return a redaction marker of EXACTLY ``n`` ASCII characters
+    (== ``n`` bytes when UTF-8 encoded, since the marker is ASCII-
+    only).
 
     Picks the longest recognizable label that fits within ``n`` and
     right-pads with ``*`` to reach the target length. The tier
     ladder is intentionally compact so a brief inline secret (e.g. a
     20-char access-key id) still renders something a human can scan,
     while longer matches get the verbose ssproxy banner.
+
+    Prefer :func:`byte_length_redaction` when the input is a captured
+    match string — it computes the byte length itself so multi-byte
+    UTF-8 in the captured value doesn't corrupt the wire-format
+    Content-Length. Passing a raw character count here is safe only
+    when the caller has already handled the UTF-8-to-bytes accounting.
 
     Used by ``scrub_text_fixed_length`` (which is consumed only by
     ssproxy's egress-body scrubber). The standard variable-length
@@ -138,6 +149,32 @@ def fixed_length_redaction(n: int) -> str:
     if n >= 7:
         return "[RDCTD]" + "*" * (n - 7)
     return "*" * n
+
+
+def byte_length_redaction(original: str) -> str:
+    """Return an ASCII redaction marker whose UTF-8 encoding has the
+    same byte length as ``original``.
+
+    ssproxy's byte-stream contract is BYTE-length preservation: the
+    egress hook decodes the request body to str, runs the scrubber,
+    and re-encodes to UTF-8 for the wire. If a captured secret span
+    contains multi-byte characters (emoji, accented chars, etc.),
+    replacing it with N ASCII asterisks — where N is the character
+    count — makes the output shorter than the input in bytes. The
+    resulting body has wrong Content-Length and every JSON offset
+    downstream is shifted; Anthropic's parser then returns
+    "unexpected character: line 1 column X" for the shifted position.
+
+    Live-reproduced 2026-08-07 (principal-engineer-9): a request body
+    containing a captured-shaped value with 3 bytes of extra UTF-8
+    produced repeated 400 Bad Request responses at column 180858.
+
+    Fix: measure ``len(original.encode("utf-8"))`` and produce that
+    many ASCII bytes. The output STR length may exceed the input STR
+    length by the multi-byte delta, but the encoded UTF-8 wire bytes
+    match exactly.
+    """
+    return fixed_length_redaction(len(original.encode("utf-8")))
 
 
 def scrub_uri(s: str) -> str:
@@ -181,8 +218,8 @@ _TOKEN_PATTERNS = [
     re.compile(r"\bdop_v1_[A-Fa-f0-9]{40,}\b"),
     # DigitalOcean OAuth access + refresh tokens. Same shape family as
     # the PAT, distinct prefixes. gitleaks has fixed-64 entries for
-    # both but no greedy pre-pass — added here so a longer body gets
-    # consumed whole (mirroring the `dop_v1_` handling).
+    # both but no greedy cork pre-pass — adding here so a longer body
+    # gets consumed whole (mirroring the `dop_v1_` handling).
     re.compile(r"\bdoo_v1_[A-Fa-f0-9]{40,}\b"),
     re.compile(r"\bdor_v1_[A-Fa-f0-9]{40,}\b"),
     # DigitalOcean Spaces access key ID. Distinctive `DO00` prefix +
@@ -196,7 +233,7 @@ _TOKEN_PATTERNS = [
     # 6-char CRC32 checksum); greedy `{36,251}` to track GitHub's
     # documented 255-char ceiling (see token-format docs).
     re.compile(r"\bghp_[A-Za-z0-9]{36,251}\b"),
-    # OAuth access token. Was fixed-36 in gitleaks; widened to greedy.
+    # OAuth access token. Was fixed-36 in gitleaks; add cork greedy.
     re.compile(r"\bgho_[A-Za-z0-9]{36,251}\b"),
     # GitHub App user-to-server token.
     re.compile(r"\bghu_[A-Za-z0-9]{36,251}\b"),
@@ -317,7 +354,7 @@ _URI_USERINFO = re.compile(
 # how GitHub PATs (and several other forge auths) are typically
 # embedded in clone URLs:
 #
-#   https://ghp_AAA...@github.com/acme/example
+#   https://ghp_AAA...@github.com/babyops-app/cork
 #   https://github_pat_XXX...@github.com/owner/repo.git
 #   https://oauth2:TOKEN@gitlab.example.com    ← caught by _URI_USERINFO
 #   https://x-access-token:TOKEN@github.com    ← caught by _URI_USERINFO
@@ -395,17 +432,17 @@ def scrub_text(s: str) -> str:
          as a clean unit. Defeats partial-match residue inside URLs
          and catches tokens with no prefix at all (legacy 40-char-hex
          OAuth tokens).
-      1. The GREEDY token-prefix patterns (`\\bghp_[A-Za-z0-9]{36,}\\b`
+      1. Cork's GREEDY token-prefix patterns (`\\bghp_[A-Za-z0-9]{36,}\\b`
          etc.). Run BEFORE gitleaks so longer-than-typical tokens get
          consumed whole — gitleaks's fixed-length patterns (`ghp_[36]`,
          `github_pat_\\w{82}`) would otherwise eat the first N chars and
-         leave the trailing chars behind as a partial leak. With the greedy pre-pass
+         leave the trailing chars behind as a partial leak. With cork
          going first, the greedy `{N,}` quantifier handles real-world
          tokens that exceed the typical length.
       2. Gitleaks-derived prefix/format patterns (~119 modern provider
-         tokens). Catches anything the greedy pre-pass doesn't have an explicit greedy
+         tokens). Catches anything cork doesn't have an explicit greedy
          pattern for (most non-github providers).
-      3. Heuristics for labeled `password=xxx`, bearer
+      3. Cork's original heuristics for labeled `password=xxx`, bearer
          auth headers, etc.
 
     Idempotent — `[REDACTED]` doesn't match any of the patterns.
@@ -424,8 +461,8 @@ def scrub_text(s: str) -> str:
     out = _URI_USERINFO_NOPASS.sub(
         lambda m: f"{m.group('scheme')}{REDACTED}@{m.group('host')}", out
     )
-    # Greedy token-prefix patterns BEFORE gitleaks. Both target overlapping
-    # token shapes (`ghp_`, `github_pat_`, etc.); the prefix patterns are `{N,}`
+    # Greedy cork patterns BEFORE gitleaks. Both target overlapping
+    # token shapes (`ghp_`, `github_pat_`, etc.); cork's are `{N,}`
     # quantifiers that consume the whole token, gitleaks's are exact
     # fixed-length and would leave the tail as a partial leak.
     for pat in _TOKEN_PATTERNS:
@@ -451,7 +488,7 @@ def scrub_text(s: str) -> str:
 #
 # Only the ssproxy addon calls these helpers. Every other consumer
 # (graphiti ingest, worker bundle scrubbing per
-# `(host-side companion library)`, MCP response scrub) keeps using
+# ``lib/cork_credential_scrubber.py``, MCP response scrub) keeps using
 # the variable-length ``REDACTED`` marker via ``scrub_text`` — where
 # log/transcript readability beats byte-count preservation.
 
@@ -462,7 +499,7 @@ def _gitleaks_replace_fixed_length(m: "re.Match") -> str:
     boundary anchor chars verbatim)."""
     if m.lastindex is None or m.lastindex < 1:
         full = m.group(0)
-        return fixed_length_redaction(len(full))
+        return byte_length_redaction(full)
     full = m.group(0)
     abs_start = m.start()
     secret_group = None
@@ -471,11 +508,11 @@ def _gitleaks_replace_fixed_length(m: "re.Match") -> str:
             secret_group = i
             break
     if secret_group is None:
-        return fixed_length_redaction(len(full))
+        return byte_length_redaction(full)
     s_start = m.start(secret_group) - abs_start
     s_end = m.end(secret_group) - abs_start
     span = s_end - s_start
-    return full[:s_start] + fixed_length_redaction(span) + full[s_end:]
+    return full[:s_start] + byte_length_redaction(full[s_start:s_end]) + full[s_end:]
 
 
 def scrub_text_fixed_length(s: str) -> str:
@@ -503,24 +540,25 @@ def scrub_text_fixed_length(s: str) -> str:
     def _uri_pair(m: "re.Match") -> str:
         # The matched span is `<scheme><user>:<pw>@`. Replace the
         # `<user>:<pw>` portion (between scheme-end and `@`) with a
-        # same-length marker.
+        # same-BYTE-length marker (byte_length_redaction) so multi-byte
+        # user/password chars don't shrink the wire body.
         prefix = m.group("scheme")
         user = m.group("user")
         pw = m.group("password")
-        span = len(user) + 1 + len(pw)  # +1 for the colon
-        return f"{prefix}{fixed_length_redaction(span)}@"
+        userinfo = f"{user}:{pw}"
+        return f"{prefix}{byte_length_redaction(userinfo)}@"
 
     def _uri_solo(m: "re.Match") -> str:
         prefix = m.group("scheme")
         userinfo = m.group("userinfo")
         host = m.group("host")
-        return f"{prefix}{fixed_length_redaction(len(userinfo))}@{host}"
+        return f"{prefix}{byte_length_redaction(userinfo)}@{host}"
 
     out = _URI_USERINFO.sub(_uri_pair, out)
     out = _URI_USERINFO_NOPASS.sub(_uri_solo, out)
 
     for pat in _TOKEN_PATTERNS:
-        out = pat.sub(lambda m: fixed_length_redaction(len(m.group(0))), out)
+        out = pat.sub(lambda m: byte_length_redaction(m.group(0)), out)
     for pat, _rid in _GITLEAKS_COMPILED:
         out = pat.sub(_gitleaks_replace_fixed_length, out)
 
@@ -536,9 +574,13 @@ def scrub_text_fixed_length(s: str) -> str:
         abs_start = m.start()
         v_start = m.start(2) - abs_start
         v_end = m.end(2) - abs_start
-        # Preserve `<label>` + `=` + whatever sat between (whitespace,
-        # quote opener). Replace only the captured value span.
-        return full[:v_start] + fixed_length_redaction(v_end - v_start) + full[v_end:]
+        value = full[v_start:v_end]
+        # byte_length_redaction: char-count preservation isn't enough
+        # for ssproxy's egress hook — multi-byte UTF-8 in the captured
+        # value shrinks wire bytes and Anthropic's JSON parser returns
+        # "unexpected character" at the shifted position (2026-08-07
+        # principal-engineer-9 400-at-col-180858 incident).
+        return full[:v_start] + byte_length_redaction(value) + full[v_end:]
 
     out = _LABELED_SECRET.sub(_labeled, out)
 
@@ -547,7 +589,8 @@ def scrub_text_fixed_length(s: str) -> str:
         abs_start = m.start()
         v_start = m.start(2) - abs_start
         v_end = m.end(2) - abs_start
-        return full[:v_start] + fixed_length_redaction(v_end - v_start) + full[v_end:]
+        value = full[v_start:v_end]
+        return full[:v_start] + byte_length_redaction(value) + full[v_end:]
 
     out = _AUTH_HEADER.sub(_auth, out)
     return out
