@@ -283,7 +283,7 @@ _LABELED_SECRET = re.compile(
     r"id[_-]?token|bearer[_-]?token|secret[_-]?key|private[_-]?key|"
     r"client[_-]?key(?:[_-]data)?|webhook[_-]?secret|signing[_-]?key|"
     r"connection[_-]?string|passphrase|encryption[_-]?key|bearer)"
-    r"\s*[:=]\s*"
+    r"['\"]?\s*[:=]\s*"
     # Value class excludes `[` and `]` too so a previously-scrubbed
     # `[REDACTED]` token doesn't get re-matched on a second pass and
     # turned into `[REDACTED]]`. Keeps the scrubber idempotent.
@@ -534,8 +534,8 @@ def scrub_text_fixed_length(s: str) -> str:
     def _labeled(m: "re.Match") -> str:
         full = m.group(0)
         abs_start = m.start()
-        v_start = m.start(1) - abs_start
-        v_end = m.end(1) - abs_start
+        v_start = m.start(2) - abs_start
+        v_end = m.end(2) - abs_start
         # Preserve `<label>` + `=` + whatever sat between (whitespace,
         # quote opener). Replace only the captured value span.
         return full[:v_start] + fixed_length_redaction(v_end - v_start) + full[v_end:]
