@@ -332,7 +332,15 @@ _LABELED_SECRET = re.compile(
     # quote's escape target — corrupting the JSON. Stopping the value
     # at the first `\` keeps every match an "intact run of value
     # bytes" with no half-escapes inside.
-    r"['\"]?([^\s,'\")\[\]\}\\]+)['\"]?",
+    #
+    # ALSO excludes `{` — an opening brace at the value position is
+    # always a nested JSON object, not a scalar secret. Without this
+    # exclusion, tool-schema fragments like `"pageToken":{"description":…}`
+    # match label=Token value=`{`, replacing `{` with `*` and
+    # corrupting the JSON structure (downstream cork pe-9 400 incident,
+    # 2026-08-07). `}` was already excluded; `{` needed the same
+    # treatment for JSON-object entry as well as exit.
+    r"['\"]?([^\s,'\")\[\]\{\}\\]+)['\"]?",
     re.IGNORECASE,
 )
 
